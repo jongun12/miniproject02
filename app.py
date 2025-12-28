@@ -24,8 +24,8 @@ st.title("📰 AI 뉴스 요약 & 감성 분석 대시보드")
 st.markdown("---")
 
 # [추가] 모듈 가져오기
-from test_naver_news import get_news_titles, get_news_data
-from test_AI_API2 import analyze_sentiment_batch, analyze_news_batch
+from news_crawler import get_news_titles, get_news_data
+from ai_analyzer import analyze_sentiment_batch, analyze_news_batch
 import pandas as pd
 
 # [시나리오] 사용자가 버튼을 눌렀을 때만 결과를 보여줌
