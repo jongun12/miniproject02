@@ -2,13 +2,9 @@ import json
 import openai
 import streamlit as st
 import os
+import re
 
-# 1. 뉴스 데이터 준비 (예시: 이미 크롤링 된 리스트)
-news_list = [
-    {"id": 1, "title": "AI 반도체 시장 급성장", "content": "엔비디아 주가가 폭등하며... (매우 긴 본문)"},
-    {"id": 2, "title": "AI 저작권 소송 패소", "content": "예술가들이 제기한 소송에서... (매우 긴 본문)"},
-    {"id": 3, "title": "정부, AI 예산 삭감 논란", "content": "내년도 R&D 예산이 줄어들며... (매우 긴 본문)"}
-]
+# ... (existing imports)
 
 # API 키 설정
 # Streamlit Cloud나 로컬 실행 환경(secrets.toml)에 따라 유연하게 처리
@@ -22,11 +18,55 @@ except FileNotFoundError:
 
 client = openai.OpenAI(api_key=api_key)
 
-def analyze_news_batch(news_items, output_limit=None):
+def extract_important_content(text, limit=1000):
+    """
+    긴 뉴스 본문에서 '앞부분(리드)'과 '인용문(큰따옴표)' 위주로 텍스트를 추출함.
+    :param text: 원본 뉴스 본문
+    :param limit: 최대 길이 제한 (기본 1000자)
+    """
+    if not text:
+        return ""
+        
+    # 1. 앞부분 300자는 무조건 포함 (기사 요약이 보통 두괄식임)
+    head_limit = 300
+    head = text[:head_limit]
+    remaining_text = text[head_limit:]
+    
+    # 2. 남은 텍스트에서 인용문(큰따옴표 안의 문장) 추출
+    # 정규식: "..." 또는 “...” 패턴 찾기
+    quotes = re.findall(r'["“]([^"”]+)["”]', remaining_text)
+    
+    extracted = [head]
+    current_length = len(head)
+    
+    # 3. 중요하다고 판단되는 인용문 추가
+    for quote in quotes:
+        # 너무 짧은 인용문(10자 미만)은 스킵할 수도 있음
+        if len(quote) < 10: 
+            continue
+            
+        # 인용문 포맷팅 (예: " ... ")
+        formatted_quote = f' "{quote}" '
+        
+        if current_length + len(formatted_quote) > limit:
+            break
+            
+        extracted.append(formatted_quote)
+        current_length += len(formatted_quote)
+    
+    # 4. 그래도 공간이 남으면 뒷부분 텍스트를 채워넣음
+    if current_length < limit:
+        rest_len = limit - current_length
+        extracted.append(remaining_text[:rest_len])
+        
+    return "".join(extracted)
+
+def analyze_news_batch(news_items, output_limit=None, keyword=None):
     """
     뉴스 리스트를 통째로 받아서 한 번에 분석하는 함수
     :param news_items: 뉴스 데이터 리스트
     :param output_limit: 결과로 반환할 최대 개수 (기본값: None = 제한 없음)
+    :param keyword: 사용자가 검색한 키워드 (분석 기준)
     """
     if not api_key:
         print("API Key가 없습니다.")
@@ -41,30 +81,47 @@ def analyze_news_batch(news_items, output_limit=None):
         news_id = news.get("id", idx)
         id_map[news_id] = news
         
+        # [수정] 단순 슬라이싱 대신 중요한 내용 추출 함수 사용
+        origin_content = news.get("content", "")
+        # 제목도 내용에 포함해주면 좋음
+        full_text = f"제목: {news['title']}\n본문: {origin_content}"
+        
+        important_content = extract_important_content(full_text, limit=1000)
+        
         simplified_data.append({
             "id": news_id,
             "title": news["title"],
-            "content": news["content"][:1000] # 앞부분 1000자만 자르기!
+            "content": important_content
         })
 
     # [최적화 2] 시스템 프롬프트 수정
+    keyword_instruction = ""
+    if keyword:
+        keyword_instruction = f"""
+        [중요] 사용자가 검색한 키워드는 '{keyword}'야. 
+        모든 분석은 이 키워드의 입장에서 수행해. 
+        예를 들어, '{keyword}'에게 유리한지(긍정), 불리한지(부정)를 기준으로 점수와 감성을 판단해.
+        제3자 입장이 아니라 당사자 입장에서 판단하는 것이 매우 중요해.
+        """
+
     # [주의] response_format={"type": "json_object"}를 쓸 때는 
     # 루트 요소가 반드시 JSON Object({})여야 합니다. List([])로 시작하면 오류가 발생할 수 있습니다.
-    system_prompt = """
+    system_prompt = f"""
     너는 뉴스 분석 AI야. 입력된 뉴스 리스트를 분석해서 아래 JSON 형식으로 반환해.
+    {keyword_instruction}
     다른 말은 하지 말고 오직 JSON 데이터만 출력해.
     
     [응답 형식]
-    {
+    {{
         "articles": [
-            {
+            {{
                 "id": 숫자,
                 "summary": "핵심 내용 3줄 요약",
                 "sentiment": "긍정" 또는 "부정" 또는 "중립",
                 "score": -1.0 ~ 1.0 사이의 점수 (부정은 음수, 긍정은 양수)
-            }
+            }}
         ]
-    }
+    }}
     """
 
     user_prompt = json.dumps(simplified_data, ensure_ascii=False)
@@ -108,27 +165,40 @@ def analyze_news_batch(news_items, output_limit=None):
         print(f"AI 호출 에러: {e}")
         return []
 
-def analyze_sentiment_batch(titles):
+def analyze_sentiment_batch(titles, keyword=None):
     """
     뉴스 제목 리스트(10~20개)를 받아 긍정/부정/중립 개수와 점수를 반환
+    :param titles: 뉴스 제목 리스트
+    :param keyword: 기준이 되는 검색 키워드
     """
     if not titles:
         return {"positive": 0, "negative": 0, "neutral": 0, "details": []}
 
+    # 키워드 관련 지시사항 추가
+    keyword_instruction = ""
+    if keyword:
+        keyword_instruction = f"""
+        [핵심 기준] 사용자가 검색한 키워드는 '{keyword}'입니다.
+        단순히 문맥적인 긍/부정이 아니라, **'{keyword}'의 입장에서** 이 뉴스가 호재(positive)인지 악재(negative)인지 판단하세요.
+        예: '경쟁사 성장' -> 문맥은 긍정이지만, '{keyword}' 입장에서는 'negative'입니다.
+        """
+
     # 1. 프롬프트 작성 (JSON 포맷 강제)
-    system_prompt = """
+    system_prompt = f"""
     너는 뉴스 감성 분석가야. 
     제공된 뉴스 제목들의 리스트를 보고 각각의 감성을 'positive', 'negative', 'neutral' 중 하나로 분류해.
+    
+    {keyword_instruction}
     
     [중요] 'sentiment' 필드 값은 반드시 영어 소문자('positive', 'negative', 'neutral')로만 출력해야 해. 한글(긍정, 부정)은 절대 사용하지 마.
     
     반드시 아래 JSON 형식으로만 응답해 (다른 말 금지):
-    {
+    {{
         "results": [
-            {"title": "뉴스 제목1", "sentiment": "positive"},
-            {"title": "뉴스 제목2", "sentiment": "negative"}
+            {{"title": "뉴스 제목1", "sentiment": "positive"}},
+            {{"title": "뉴스 제목2", "sentiment": "negative"}}
         ]
-    }
+    }}
     """
     
     # 제목 리스트를 문자열로 변환해서 보냄

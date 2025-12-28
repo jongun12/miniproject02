@@ -35,11 +35,11 @@ if st.session_state['searched']:
     with st.spinner(f"'{keyword}' 관련 뉴스를 수집하고 분석 중입니다..."):
         # (1) 트랙 1: 통계용 제목 수집 및 감성 분석
         titles = get_news_titles(keyword, limit=20)
-        sentiment_result = analyze_sentiment_batch(titles)
+        sentiment_result = analyze_sentiment_batch(titles, keyword=keyword)
         
         # (2) 트랙 2: 상세용 본문 수집 및 요약 (5건 수집 -> 3건 출력)
         full_news = get_news_data(keyword, display_count=5)
-        analyzed_list = analyze_news_batch(full_news, output_limit=3)
+        analyzed_list = analyze_news_batch(full_news, output_limit=3, keyword=keyword)
 
     # 데이터 가공 (통계)
     total_count = len(titles)

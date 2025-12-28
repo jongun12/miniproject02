@@ -23,7 +23,7 @@ if st.button("분석 시작"):
             st.error("뉴스를 찾을 수 없습니다.")
         else:
             # 2. AI로 감성 분석
-            sentiment_result = analyze_sentiment_batch(titles)
+            sentiment_result = analyze_sentiment_batch(titles, keyword=keyword)
             
             # 3. 결과 시각화 (막대 차트)
             st.subheader(f"📊 '{keyword}' 관련 여론 분석 (20건 기준)")
@@ -60,7 +60,7 @@ if st.button("분석 시작"):
         
         if full_news:
              # 2. AI에게 요약 및 분석 요청
-            analyzed_list = analyze_news_batch(full_news)
+            analyzed_list = analyze_news_batch(full_news, keyword=keyword)
             
             st.subheader("📝 주요 뉴스 상세 리포트")
             
